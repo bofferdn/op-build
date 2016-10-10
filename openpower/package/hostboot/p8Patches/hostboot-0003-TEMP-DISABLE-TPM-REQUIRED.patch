@@ -1,0 +1,120 @@
+From a82072be9fdcb6a195aa2674020a59b7193a69f3 Mon Sep 17 00:00:00 2001
+From: Nick Bofferding <bofferdn@us.ibm.com>
+Date: Sun, 9 Oct 2016 15:30:01 -0500
+Subject: [PATCH] TEMP DISABLE TPM REQUIRED
+
+Change-Id: Ic707ce767bb4d08cb5407c8a9bed24b69f0deb30
+---
+ src/usr/targeting/common/xmltohb/attribute_types.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/usr/targeting/common/xmltohb/attribute_types.xml b/src/usr/targeting/common/xmltohb/attribute_types.xml
+index 5233e50..28acbc4 100644
+--- a/src/usr/targeting/common/xmltohb/attribute_types.xml
++++ b/src/usr/targeting/common/xmltohb/attribute_types.xml
+@@ -15314,101 +15314,101 @@ firmware notes: Platforms should initialize this attribute to AUTO (0)</descript
+     </description>
+     <simpleType>
+         <uint64_t></uint64_t>
+     </simpleType>
+     <persistency>volatile-zeroed</persistency>
+     <readable/>
+     <writeable/>
+ </attribute>
+ 
+ <attribute>
+     <id>OPT_MEMMAP_GROUP_POLICY</id>
+     <description>
+        Controls scope of grouping performed in memory map calculations
+        Possible values defined in FAPI ATTR_OPT_MEMMAP_GROUP_POLICY
+     </description>
+     <simpleType>
+         <uint8_t><default>0x00</default></uint8_t><!-- CHIP_AS_GROUP -->
+     </simpleType>
+     <readable/>
+     <persistency>non-volatile</persistency>
+     <hwpfToHbAttrMap>
+         <id>ATTR_OPT_MEMMAP_GROUP_POLICY</id>
+         <macro>DIRECT</macro>
+     </hwpfToHbAttrMap>
+ </attribute>
+ 
+ <attribute>
+     <id>MFG_TRACE_ENABLE</id>
+     <description>
+         Override this to a non-zero value to have the FAPI manufacturing
+         traces output to the console or go to a fsp trace buffer when
+         console not enabled.
+     </description>
+     <simpleType><uint8_t></uint8_t></simpleType>
+     <persistency>volatile-zeroed</persistency>
+     <readable/>
+     <hwpfToHbAttrMap>
+         <id>ATTR_MFG_TRACE_ENABLE</id>
+         <macro>DIRECT</macro>
+     </hwpfToHbAttrMap>
+ </attribute>
+ 
+ <attribute>
+     <id>TPM_REQUIRED</id>
+     <description>
+         Setting to require(0x1) or not require(0x0) a functional TPM to
+         boot the system.
+     </description>
+     <simpleType>
+       <uint8_t>
+-        <default>1</default>
++        <default>0</default>
+       </uint8_t>
+     </simpleType>
+     <persistency>non-volatile</persistency>
+     <readable/>
+ </attribute>
+ 
+ <attribute>
+   <id>PROC_PCIE_NUM_PHB</id>
+   <description>
+       creator: platform
+         Number of PCIe PHB units present on target
+         Murano/Venice: 3
+         Naples: 4
+   </description>
+   <simpleType>
+       <uint8_t></uint8_t>
+   </simpleType>
+   <persistency>non-volatile</persistency>
+   <readable/>
+   <hwpfToHbAttrMap>
+       <id>ATTR_PROC_PCIE_NUM_PHB</id>
+       <macro>DIRECT</macro>
+   </hwpfToHbAttrMap>
+ </attribute>
+ 
+ <attribute>
+   <id>PROC_PCIE_NUM_IOP</id>
+   <description>
+       creator: platform
+         Number of PCIe IOP units present on target
+         Murano/Venice: 2
+         Naples: 3
+   </description>
+   <simpleType>
+       <uint8_t></uint8_t>
+   </simpleType>
+   <persistency>non-volatile</persistency>
+   <readable/>
+   <hwpfToHbAttrMap>
+       <id>ATTR_PROC_PCIE_NUM_IOP</id>
+       <macro>DIRECT</macro>
+   </hwpfToHbAttrMap>
+ </attribute>
+ 
+ <attribute>
+   <id>PROC_PCIE_NUM_LANES</id>
+   <description>
+       creator: platform
+         Number of PCIe I/O lanes supported by target
+         Murano: 24
+-- 
+1.8.2.2
+

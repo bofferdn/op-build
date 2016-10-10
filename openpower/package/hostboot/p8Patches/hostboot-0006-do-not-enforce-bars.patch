@@ -1,0 +1,33 @@
+From 9fdb30612fe12d58a7758762b03c4dbc09eaa0f3 Mon Sep 17 00:00:00 2001
+From: Nick Bofferding <bofferdn@us.ibm.com>
+Date: Mon, 10 Oct 2016 11:18:26 -0500
+Subject: [PATCH] Don't enforce bar
+
+Change-Id: Iec9d3c150ef486732318f8b16990bd3e205beefc
+---
+ src/usr/secureboot/base/settings.C | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/usr/secureboot/base/settings.C b/src/usr/secureboot/base/settings.C
+index 75fcb61..3dd69b7 100644
+--- a/src/usr/secureboot/base/settings.C
++++ b/src/usr/secureboot/base/settings.C
+@@ -153,6 +153,7 @@ namespace SECUREBOOT
+     errlHndl_t Settings::procBarValuesMatch(TARGETING::Target* i_targ)
+     {
+         errlHndl_t l_errl = NULL;
++#if 0
+ 
+         assert(i_targ != NULL,"supplied target pointer is NULL");
+         assert(i_targ == TARGETING::MASTER_PROCESSOR_CHIP_TARGET_SENTINEL ||
+@@ -253,6 +254,7 @@ namespace SECUREBOOT
+                                          true /* Add HB Software Callout */ );
+             l_errl->collectTrace(SECURE_COMP_NAME,256);
+         }
++#endif        
+         return l_errl;
+     }
+     #endif
+-- 
+1.8.2.2
+

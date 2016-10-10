@@ -1,0 +1,38 @@
+From ff4d22a84617e8221be89559e1939345c1bbf519 Mon Sep 17 00:00:00 2001
+From: Nick Bofferding <bofferdn@us.ibm.com>
+Date: Sun, 9 Oct 2016 16:00:31 -0500
+Subject: [PATCH] TEMP FORCE MASTER SECURITY TO 0
+
+Change-Id: I97ff22ba95b6708c2832658f1bf72c2ae709a15c
+---
+ src/usr/secureboot/base/settings.C | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/usr/secureboot/base/settings.C b/src/usr/secureboot/base/settings.C
+index b83f280..9aa6363 100644
+--- a/src/usr/secureboot/base/settings.C
++++ b/src/usr/secureboot/base/settings.C
+@@ -93,6 +93,20 @@ namespace SECUREBOOT
+         errlHndl_t l_errl = NULL;
+         size_t size = sizeof(iv_regValue);
+ 
++        uint64_t pbabar=0x000000000FF00000ull;
++        l_errl = deviceWrite(TARGETING::MASTER_PROCESSOR_CHIP_TARGET_SENTINEL,
++                            &pbabar, size,
++                            DEVICE_SCOM_ADDRESS(0x02013F07));
++        uint64_t bar=0x0003FFFFF0000000ull;
++        l_errl = deviceWrite(TARGETING::MASTER_PROCESSOR_CHIP_TARGET_SENTINEL,
++                            &bar, size,
++                            DEVICE_SCOM_ADDRESS(0x02020016));
++        //iv_regValue = 0;
++        //l_errl = deviceWrite(TARGETING::MASTER_PROCESSOR_CHIP_TARGET_SENTINEL,
++        //                    &iv_regValue, size,
++        //                    DEVICE_SCOM_ADDRESS(PROC_SECURITY_SWITCH_REGISTER));
++        assert(NULL == l_errl);
++
+         // Read / cache security switch setting from processor.
+         l_errl = deviceRead(TARGETING::MASTER_PROCESSOR_CHIP_TARGET_SENTINEL,
+                             &iv_regValue, size,
+-- 
+1.8.2.2
+
