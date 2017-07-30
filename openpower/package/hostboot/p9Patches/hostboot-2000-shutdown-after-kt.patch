@@ -1,0 +1,465 @@
+From f1ce8102d55083bc0d89eeb270d58258a1fc6c55 Mon Sep 17 00:00:00 2001
+From: Nick Bofferding <bofferdn@us.ibm.com>
+Date: Fri, 21 Jul 2017 11:15:42 -0500
+Subject: [PATCH] Secure Boot: Shutdown after key transition
+
+Change-Id: I74eaec08e86d0cbc46db6aa1674845c53bcf14d4
+RTC: 174017
+---
+ src/include/usr/initservice/initsvcreasoncodes.H   |  3 +-
+ src/include/usr/initservice/istepdispatcherif.H    | 14 +++--
+ src/include/usr/ipmi/ipmiif.H                      | 34 +++++++++--
+ .../initservice/istepdispatcher/istepdispatcher.C  | 62 +++++++++++++++----
+ .../initservice/istepdispatcher/istepdispatcher.H  |  9 ++-
+ src/usr/ipmi/ipmirp.C                              | 34 +++++++----
+ src/usr/ipmi/ipmirp.H                              | 16 ++++-
+ src/usr/sbe/sbe_update.C                           | 69 +++++++++++++++++-----
+ 8 files changed, 186 insertions(+), 55 deletions(-)
+
+diff --git a/src/include/usr/initservice/initsvcreasoncodes.H b/src/include/usr/initservice/initsvcreasoncodes.H
+index e174564..e505028 100644
+--- a/src/include/usr/initservice/initsvcreasoncodes.H
++++ b/src/include/usr/initservice/initsvcreasoncodes.H
+@@ -5,7 +5,7 @@
+ /*                                                                        */
+ /* OpenPOWER HostBoot Project                                             */
+ /*                                                                        */
+-/* Contributors Listed Below - COPYRIGHT 2011,2015                        */
++/* Contributors Listed Below - COPYRIGHT 2011,2017                        */
+ /* [+] International Business Machines Corp.                              */
+ /*                                                                        */
+ /*                                                                        */
+@@ -76,6 +76,7 @@ enum    InitServiceReasonCode
+     RECONFIG_LOOP_TEST_RC        =   INITSVC_COMP_ID | 0x0f,
+     //termination_rc
+     SHUTDOWN_NOT_RECONFIG_LOOP   =   INITSVC_COMP_ID | 0x10,
++    ISTEP_PROCESSING_DISABLED    =   INITSVC_COMP_ID | 0x11,
+ };
+ 
+ enum InitServiceUserDetailDataSubSection
+diff --git a/src/include/usr/initservice/istepdispatcherif.H b/src/include/usr/initservice/istepdispatcherif.H
+index 752f9ff..1694c79 100644
+--- a/src/include/usr/initservice/istepdispatcherif.H
++++ b/src/include/usr/initservice/istepdispatcherif.H
+@@ -5,7 +5,7 @@
+ /*                                                                        */
+ /* OpenPOWER HostBoot Project                                             */
+ /*                                                                        */
+-/* Contributors Listed Below - COPYRIGHT 2012,2016                        */
++/* Contributors Listed Below - COPYRIGHT 2012,2017                        */
+ /* [+] International Business Machines Corp.                              */
+ /*                                                                        */
+ /*                                                                        */
+@@ -78,12 +78,16 @@ void stopIpl( void );
+ 
+ #ifdef CONFIG_BMC_IPMI
+ /**
+- * @brief This function is to be used by external code to
+- *        initate a system reboot via IPMI commands
+- *
+- * @return Nothing
++ *  @brief This function is to be used by external code to
++ *    initiate a system reboot via IPMI commands
+  */
+ void requestReboot( void );
++
++/**
++ *  @brief This function is to be used by external code to
++ *    initiate a system power off via IPMI commands
++ */
++void requestPowerOff( void );
+ #endif
+ 
+ /**
+diff --git a/src/include/usr/ipmi/ipmiif.H b/src/include/usr/ipmi/ipmiif.H
+index 09f0c48..4dd5e7c 100644
+--- a/src/include/usr/ipmi/ipmiif.H
++++ b/src/include/usr/ipmi/ipmiif.H
+@@ -5,7 +5,7 @@
+ /*                                                                        */
+ /* OpenPOWER HostBoot Project                                             */
+ /*                                                                        */
+-/* Contributors Listed Below - COPYRIGHT 2012,2016                        */
++/* Contributors Listed Below - COPYRIGHT 2012,2017                        */
+ /* [+] International Business Machines Corp.                              */
+ /*                                                                        */
+ /*                                                                        */
+@@ -54,13 +54,30 @@ namespace IPMI
+ 
+         MSG_STATE_GRACEFUL_SHUTDOWN,
+ 
+-        // initate a reboot request
+-        MSG_STATE_INITATE_POWER_CYCLE,
++        // initiate a reboot request
++        MSG_STATE_INITIATE_POWER_CYCLE,
+ 
+         // Used to check range. Leave as last.
+-        MSG_LAST_TYPE = MSG_STATE_INITATE_POWER_CYCLE,
++        MSG_LAST_TYPE = MSG_STATE_INITIATE_POWER_CYCLE,
+     };
+ 
++    /**
++     *  @brief Returns whether IPMI message type is related to
++     *    system shutdown/reboot or not
++     *
++     *  @param[in] i_msgType IPMI message type in question
++     *
++     *  @return bool True or false value indicating whether requested IPMI
++     *     message type is related to system shutdown/reboot or not
++     */
++    inline bool validShutdownRebootMsgType(const msg_type i_msgType)
++    {
++        return (   (i_msgType == MSG_STATE_SHUTDOWN)
++                || (i_msgType == MSG_STATE_SHUTDOWN_SEL)
++                || (i_msgType == MSG_STATE_GRACEFUL_SHUTDOWN)
++                || (i_msgType == MSG_STATE_INITIATE_POWER_CYCLE));
++    }
++
+     // chassis power off request types
+     enum power_request_type
+     {
+@@ -349,12 +366,17 @@ namespace IPMI
+     size_t max_buffer(void);
+ 
+     /**
+-     * Tells ipmirp to start a graceful reboot sequence
+-     *
++     *  @brief Initiate a graceful reboot sequence via the IPMI resource
++     *    provider
+      */
+     void initiateReboot();
+ 
+     /**
++     *  @brief Initiate a power off sequence via the IPMI resource provider
++     */
++    void initiatePowerOff();
++
++    /**
+      * Structure to return BMC/IPMI information in
+      */
+     struct BmcInfo_t
+diff --git a/src/usr/initservice/istepdispatcher/istepdispatcher.C b/src/usr/initservice/istepdispatcher/istepdispatcher.C
+index c365978..bc46985 100644
+--- a/src/usr/initservice/istepdispatcher/istepdispatcher.C
++++ b/src/usr/initservice/istepdispatcher/istepdispatcher.C
+@@ -1437,11 +1437,20 @@ void IStepDispatcher::handleShutdownMsg(msg_t * & io_pMsg)
+ #ifdef CONFIG_BMC_IPMI
+ void IStepDispatcher::requestReboot()
+ {
+-    // always stop dispatching isteps before calling for the reboot
+-    setStopIpl();
++    // Always stop dispatching isteps before calling for the reboot
++    (void)setStopIpl();
+ 
+-    // send a reboot message to the BMC
+-    IPMI::initiateReboot();
++    // Send a reboot message to the BMC
++    (void)IPMI::initiateReboot();
++}
++
++void IStepDispatcher::requestPowerOff()
++{
++    // Always stop dispatching isteps before calling for the power off
++    (void)setStopIpl();
++
++    // Send a power off message to the BMC
++    (void)IPMI::initiatePowerOff();
+ }
+ #endif
+ // ----------------------------------------------------------------------------
+@@ -1678,21 +1687,42 @@ void IStepDispatcher::handleIStepRequestMsg(msg_t * & io_pMsg)
+     l_acceptMessages = iv_acceptIstepMessages;
+     mutex_unlock(&iv_mutex);
+ 
+-    if (l_acceptMessages)
++    // If istep dispatching has ceased, prevent new isteps from executing
++    if(iv_stopIpl == true)
++    {
++        /*@
++         * @errortype
++         * @reasoncode  ISTEP_PROCESSING_DISABLED
++         * @severity    ERRORLOG::ERRL_SEV_INFORMATIONAL
++         * @moduleid    ISTEP_INITSVC_MOD_ID
++         * @userdata1   Istep Requested
++         * @userdata2   Substep Requested
++         * @devdesc     Istep processing has terminated due to normal shutdown
++         *   activity, secure boot key transition, or terminating error
++         * @custdesc    Node is no longer accepting istep requests
++         */
++        err = new ERRORLOG::ErrlEntry(
++            ERRORLOG::ERRL_SEV_INFORMATIONAL,
++            ISTEP_INITSVC_MOD_ID,
++            ISTEP_PROCESSING_DISABLED,
++            iv_curIStep,
++            iv_curSubStep);
++    }
++    else if (l_acceptMessages)
+     {
+         err = doIstep (istep, substep, l_doReconfig);
+     }
+     else
+     {
+         /*@
+-             * @errortype
+-             * @reasoncode       ISTEP_NON_MASTER_NODE_MSG
+-             * @severity         ERRORLOG::ERRL_SEV_UNRECOVERABLE
+-             * @moduleid         ISTEP_INITSVC_MOD_ID
+-             * @userdata1        Istep Requested
+-             * @userdata2        Substep Requested
+-             * @devdesc          Istep messaged received by non-master node.
+-        */
++         * @errortype
++         * @reasoncode  ISTEP_NON_MASTER_NODE_MSG
++         * @severity    ERRORLOG::ERRL_SEV_UNRECOVERABLE
++         * @moduleid    ISTEP_INITSVC_MOD_ID
++         * @userdata1   Istep Requested
++         * @userdata2   Substep Requested
++         * @devdesc     Istep messaged received by non-master node.
++         */
+         err = new ERRORLOG::ErrlEntry(
+                                       ERRORLOG::ERRL_SEV_UNRECOVERABLE,
+                                       ISTEP_INITSVC_MOD_ID,
+@@ -2170,9 +2200,15 @@ void requestReboot()
+ {
+     IStepDispatcher::getTheInstance().requestReboot();
+ }
++
++void requestPowerOff()
++{
++    IStepDispatcher::getTheInstance().requestPowerOff();
++}
+ #endif
+ void stopIpl()
+ {
++    // Disable the istep dispatcher
+     return IStepDispatcher::getTheInstance().setStopIpl();
+ }
+ 
+diff --git a/src/usr/initservice/istepdispatcher/istepdispatcher.H b/src/usr/initservice/istepdispatcher/istepdispatcher.H
+index 2ef7c75..ebe4449 100644
+--- a/src/usr/initservice/istepdispatcher/istepdispatcher.H
++++ b/src/usr/initservice/istepdispatcher/istepdispatcher.H
+@@ -5,7 +5,7 @@
+ /*                                                                        */
+ /* OpenPOWER HostBoot Project                                             */
+ /*                                                                        */
+-/* Contributors Listed Below - COPYRIGHT 2011,2016                        */
++/* Contributors Listed Below - COPYRIGHT 2011,2017                        */
+ /* [+] International Business Machines Corp.                              */
+ /*                                                                        */
+ /*                                                                        */
+@@ -216,9 +216,14 @@ public:
+     void stop();
+ #ifdef CONFIG_BMC_IPMI
+     /**
+-     * @brief This function will trigger a reboot via ipmi commands
++     * @brief Trigger a reboot via IPMI commands
+      */
+     void requestReboot();
++
++    /**
++     * @brief Trigger a power off via IPMI commands
++     */
++    void requestPowerOff();
+ #endif
+ 
+ 
+diff --git a/src/usr/ipmi/ipmirp.C b/src/usr/ipmi/ipmirp.C
+index 4c5db3f..6b11387 100644
+--- a/src/usr/ipmi/ipmirp.C
++++ b/src/usr/ipmi/ipmirp.C
+@@ -5,7 +5,7 @@
+ /*                                                                        */
+ /* OpenPOWER HostBoot Project                                             */
+ /*                                                                        */
+-/* Contributors Listed Below - COPYRIGHT 2012,2016                        */
++/* Contributors Listed Below - COPYRIGHT 2012,2017                        */
+ /* [+] International Business Machines Corp.                              */
+ /*                                                                        */
+ /*                                                                        */
+@@ -696,8 +696,8 @@ void IpmiRP::execute(void)
+             }
+             break;
+ 
+-            // begin a graceful reboot initated by us
+-        case IPMI::MSG_STATE_INITATE_POWER_CYCLE:
++        // begin a graceful reboot initiated by us
++        case IPMI::MSG_STATE_INITIATE_POWER_CYCLE:
+             {
+                 msg_free(msg);
+ 
+@@ -1078,15 +1078,27 @@ namespace IPMI
+         return err;
+     }
+ 
+-    ///
+-    /// @brief  kick off a reboot
+-    ///
++    void initiateShutdownOrReboot(const IPMI::msg_type i_msgType)
++    {
++        const auto valid = IPMI::validShutdownRebootMsgType(i_msgType);
++        assert(valid,"BUG! IPMI message type of 0x%08X is not a valid shutdown "
++            "or reboot type",i_msgType);
++        static auto mq = Singleton<IpmiRP>::instance().msgQueue();
++        auto pMsg = msg_allocate();
++        assert(pMsg != nullptr,"BUG! msg_allocate returned nullptr.");
++        pMsg->type = i_msgType;
++        auto rc = msg_send(mq,pMsg);
++        assert(!rc,"BUG! msg_send failed with rc of %d",rc);
++    }
++
+     void initiateReboot()
+     {
+-        static msg_q_t mq = Singleton<IpmiRP>::instance().msgQueue();
+-        msg_t * msg = msg_allocate();
+-        msg->type =  IPMI::MSG_STATE_INITATE_POWER_CYCLE;
+-        msg_send(mq, msg);
++        (void)initiateShutdownOrReboot(MSG_STATE_INITIATE_POWER_CYCLE);
++    }
++
++    void initiatePowerOff()
++    {
++        (void)initiateShutdownOrReboot(MSG_STATE_GRACEFUL_SHUTDOWN);
+     }
+ 
+     ///
+@@ -1163,4 +1175,4 @@ namespace IPMI
+         return l_info;
+     }
+ 
+-};
++}; // End namespace IPMI
+diff --git a/src/usr/ipmi/ipmirp.H b/src/usr/ipmi/ipmirp.H
+index 9e88325..0bbbaaf 100644
+--- a/src/usr/ipmi/ipmirp.H
++++ b/src/usr/ipmi/ipmirp.H
+@@ -5,7 +5,7 @@
+ /*                                                                        */
+ /* OpenPOWER HostBoot Project                                             */
+ /*                                                                        */
+-/* Contributors Listed Below - COPYRIGHT 2012,2015                        */
++/* Contributors Listed Below - COPYRIGHT 2012,2017                        */
+ /* [+] International Business Machines Corp.                              */
+ /*                                                                        */
+ /*                                                                        */
+@@ -267,4 +267,18 @@ class IpmiRP
+     IpmiRP(const IpmiRP&);
+ };
+ 
++namespace IPMI
++{
++    /**
++     *  @brief Initiate generic IPMI shutdown/reboot request via the IPMI
++     *      resource provider
++     *
++     *  @param[in] i_msgType IPMI message type indicating the shutdown or reboot
++     *    to request.  Asserts if not a valid shutdown or reboot message type as
++     *    determined by IPMI::validShutdownRebootMsgType().
++     */
++    void initiateShutdownOrReboot(IPMI::msg_type i_msgType);
++
++} // End IPMI namespace
++
+ #endif
+diff --git a/src/usr/sbe/sbe_update.C b/src/usr/sbe/sbe_update.C
+index 78f66d3..487d59a 100644
+--- a/src/usr/sbe/sbe_update.C
++++ b/src/usr/sbe/sbe_update.C
+@@ -54,6 +54,8 @@
+ #include <sbeio/sbeioif.H>
+ #include <sbe/sbereasoncodes.H>
+ #include <sbe/sbe_update.H>
++#include <initservice/initsvcreasoncodes.H>
++
+ #ifdef CONFIG_BMC_IPMI
+ #include <ipmi/ipmisensor.H>
+ #include <ipmi/ipmiwatchdog.H>
+@@ -481,8 +483,10 @@ namespace SBE
+             /**************************************************************/
+             /*  Perform System Operation                                  */
+             /**************************************************************/
+-            // Restart IPL if SBE Update requires it
+-            if ( l_restartNeeded == true )
++
++            // Restart IPL if SBE Update requires it or key transition occurred
++            if (   (l_restartNeeded == true)
++                || (g_do_hw_keys_hash_transition))
+             {
+                 TRACFCOMP( g_trac_sbe,
+                            INFO_MRK"updateProcessorSbeSeeproms(): Restart "
+@@ -5041,25 +5045,58 @@ errlHndl_t sbeDoReboot( void )
+ #endif
+ 
+ #ifdef CONFIG_CONSOLE
+-        CONSOLE::displayf(SBE_COMP_NAME, "System Rebooting To "
+-                          "Perform SBE Update\n");
+-        CONSOLE::flush();
++        if(g_do_hw_keys_hash_transition)
++        {
++            CONSOLE::displayf(SBE_COMP_NAME, "Performing Secure Boot key transition\n");
++            CONSOLE::displayf(SBE_COMP_NAME, "System will power off after completion\n");
++            CONSOLE::flush();
++        }
++        else
++        {
++            CONSOLE::displayf(SBE_COMP_NAME, "System Rebooting To "
++                              "Perform SBE Update\n");
++            CONSOLE::flush();
++        }
+ #endif
+ 
+ 
+ #ifdef CONFIG_BMC_IPMI
+-        // initate a graceful power cycle
+-        TRACFCOMP( g_trac_sbe,"sbeDoReboot: "
+-                   "requesting chassis power cycle");
+-        INITSERVICE::requestReboot();
++        if(g_do_hw_keys_hash_transition)
++        {
++            // Initiate a graceful power off
++            TRACFCOMP(g_trac_sbe,
++                INFO_MRK"sbeDoReboot(): Performing Secure Boot key transition. "
++                "Requesting power off");
++            INITSERVICE::requestPowerOff();
++        }
++        else
++        {
++            // Initiate a graceful power cycle
++            TRACFCOMP( g_trac_sbe,"sbeDoReboot: "
++                       "requesting power cycle");
++            INITSERVICE::requestReboot();
++        }
+ #else //non-IPMI
+-        TRACFCOMP( g_trac_sbe,
+-                   INFO_MRK"sbeDoReboot(): Calling "
+-                   "INITSERVICE::doShutdown() with "
+-                   "SBE_UPDATE_REQUEST_REIPL = 0x%X",
+-                   SBE_UPDATE_REQUEST_REIPL );
+-        // shutdown/TI hostboot
+-        INITSERVICE::doShutdown(SBE_UPDATE_REQUEST_REIPL);
++        if(g_do_hw_keys_hash_transition)
++        {
++            TRACFCOMP(g_trac_sbe,
++                INFO_MRK"sbeDoReboot(): Performing Secure Boot key transition. "
++                "Calling INITSERVICE::doShutdown() with "
++                "SHUTDOWN_NOT_RECONFIG_LOOP = 0x%08X",
++                INITSERVICE::SHUTDOWN_NOT_RECONFIG_LOOP );
++            INITSERVICE::doShutdown(INITSERVICE::
++                                    SHUTDOWN_NOT_RECONFIG_LOOP);
++        }
++        else
++        {
++            TRACFCOMP( g_trac_sbe,
++                       INFO_MRK"sbeDoReboot(): Calling "
++                       "INITSERVICE::doShutdown() with "
++                       "SBE_UPDATE_REQUEST_REIPL = 0x%08X",
++                       SBE_UPDATE_REQUEST_REIPL );
++            // shutdown/TI hostboot
++            INITSERVICE::doShutdown(SBE_UPDATE_REQUEST_REIPL);
++        }
+ #endif
+ 
+     }while(0);
+-- 
+1.8.2.2
+
